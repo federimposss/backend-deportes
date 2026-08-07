@@ -29,79 +29,86 @@ def obtener_agenda_real():
                     html = marco.content()
                     soup = BeautifulSoup(html, "html.parser")
 
-                    bloques = soup.find_all(["div", "tr", "li", "section", "article"])
+                    # Buscamos elementos detallados
+                    bloques = soup.find_all(["div", "tr", "li", "section", "article", "p"])
                     
                     for bloque in bloques:
                         texto_bloque = bloque.get_text(separator=" ", strip=True)
                         
-                        tiene_hora = bool(re.search(r'\d{2}:\d{2}', texto_bloque))
-                        tiene_vs = " vs " in texto_bloque.lower() or " - " in texto_bloque
+                        # FILTRO CLAVE: Un bloque de un solo partido debe tener EXACTAMENTE una hora (HH:MM).
+                        # Si tiene varias horas, es un contenedor general que agrupa muchos partidos y lo ignoramos.
+                        horas_en_bloque = re.findall(r'\d{2}:\d{2}', texto_bloque)
+                        if len(horas_en_bloque) != 1:
+                            continue
                         
-                        if tiene_hora and tiene_vs:
-                            lineas = [l.strip() for l in texto_bloque.split('\n') if len(l.strip()) > 5]
-                            titulo_partido = ""
-                            for l in lineas:
-                                if (re.search(r'\d{2}:\d{2}', l) and ("vs" in l.lower() or " - " in l)) or ":" in l:
-                                    titulo_partido = l
-                                    break
-                            if not titulo_partido:
-                                titulo_partido = lineas[0] if lineas else ""
+                        tiene_vs = " vs " in texto_bloque.lower() or " - " in texto_bloque
+                        if not tiene_vs:
+                            continue
 
-                            titulo_partido = re.sub(r'(Calidad \d+p|720p|1080p|HD|SD)', '', titulo_partido, flags=re.IGNORECASE)
-                            titulo_partido = " ".join(titulo_partido.split()).strip()
+                        lineas = [l.strip() for l in texto_bloque.split('\n') if len(l.strip()) > 5]
+                        titulo_partido = ""
+                        for l in lineas:
+                            if (re.search(r'\d{2}:\d{2}', l) and ("vs" in l.lower() or " - " in l)) or ":" in l:
+                                titulo_partido = l
+                                break
+                        if not titulo_partido:
+                            titulo_partido = lineas[0] if lineas else ""
 
-                            if len(titulo_partido) > 8:
-                                enlaces_bloque = bloque.find_all("a", href=True)
-                                canales_partido = []
+                        titulo_partido = re.sub(r'(Calidad \d+p|720p|1080p|HD|SD)', '', titulo_partido, flags=re.IGNORECASE)
+                        titulo_partido = " ".join(titulo_partido.split()).strip()
+
+                        if len(titulo_partido) > 8:
+                            enlaces_bloque = bloque.find_all("a", href=True)
+                            canales_partido = []
+                            
+                            for a in enlaces_bloque:
+                                href = a["href"]
+                                if "inicio.php" in href or href.startswith("#") or "javascript" in href or not href.strip():
+                                    continue
+                                    
+                                calidad = "SD"
+                                etiquetas_texto = a.find_all(["span", "div", "b", "strong"])
+                                for etiqueta in etiquetas_texto:
+                                    txt_eti = etiqueta.get_text(strip=True).lower()
+                                    if any(x in txt_eti for x in ["720p", "1080p", "hd", "4k", "calidad"]):
+                                        calidad = etiqueta.get_text(strip=True)
+                                        etiqueta.decompose()
                                 
-                                for a in enlaces_bloque:
-                                    href = a["href"]
-                                    if "inicio.php" in href or href.startswith("#") or "javascript" in href or not href.strip():
-                                        continue
-                                        
-                                    calidad = "SD"
-                                    etiquetas_texto = a.find_all(["span", "div", "b", "strong"])
-                                    for etiqueta in etiquetas_texto:
-                                        txt_eti = etiqueta.get_text(strip=True).lower()
-                                        if any(x in txt_eti for x in ["720p", "1080p", "hd", "4k", "calidad"]):
-                                            calidad = etiqueta.get_text(strip=True)
-                                            etiqueta.decompose()
+                                texto_canal = a.get_text(separator=" ", strip=True)
+                                if not texto_canal:
+                                    img = a.find("img")
+                                    texto_canal = (img.get("alt") or img.get("title") or "Ver Canal") if img else "Ver Canal"
+                                
+                                texto_canal = " ".join(texto_canal.split())
+                                if len(texto_canal) < 2 or "ver enlace" in texto_canal.lower():
+                                    continue
                                     
-                                    texto_canal = a.get_text(separator=" ", strip=True)
-                                    if not texto_canal:
-                                        img = a.find("img")
-                                        texto_canal = (img.get("alt") or img.get("title") or "Ver Canal") if img else "Ver Canal"
-                                    
-                                    texto_canal = " ".join(texto_canal.split())
-                                    if len(texto_canal) < 2 or "ver enlace" in texto_canal.lower():
-                                        continue
-                                        
-                                    url_completa = urljoin(url_base, href)
-                                    
-                                    servidor_real = "Desconocido"
-                                    if "?r=" in url_completa:
-                                        try:
-                                            codigo_b64 = url_completa.split("?r=")[1].split("&")[0]
-                                            codigo_b64 += "=" * ((4 - len(codigo_b64) % 4) % 4)
-                                            servidor_real = base64.b64decode(codigo_b64).decode('utf-8')
-                                        except Exception:
-                                            pass
+                                url_completa = urljoin(url_base, href)
+                                
+                                servidor_real = "Desconocido"
+                                if "?r=" in url_completa:
+                                    try:
+                                        codigo_b64 = url_completa.split("?r=")[1].split("&")[0]
+                                        codigo_b64 += "=" * ((4 - len(codigo_b64) % 4) % 4)
+                                        servidor_real = base64.b64decode(codigo_b64).decode('utf-8')
+                                    except Exception:
+                                        pass
 
-                                    if not any(c["url_original"] == url_completa for c in canales_partido):
-                                        canales_partido.append({
-                                            "nombre": texto_canal,
-                                            "url_original": url_completa,
-                                            "servidor": servidor_real,
-                                            "calidad": calidad
-                                        })
-                                        
-                                if canales_partido:
-                                    if titulo_partido not in partidos_dict:
-                                        partidos_dict[titulo_partido] = canales_partido
-                                    else:
-                                        for c in canales_partido:
-                                            if not any(ex["url_original"] == c["url_original"] for ex in partidos_dict[titulo_partido]):
-                                                partidos_dict[titulo_partido].append(c)
+                                if not any(c["url_original"] == url_completa for c in canales_partido):
+                                    canales_partido.append({
+                                        "nombre": texto_canal,
+                                        "url_original": url_completa,
+                                        "servidor": servidor_real,
+                                        "calidad": calidad
+                                    })
+                                    
+                            if canales_partido:
+                                if titulo_partido not in partidos_dict:
+                                    partidos_dict[titulo_partido] = canales_partido
+                                else:
+                                    for c in canales_partido:
+                                        if not any(ex["url_original"] == c["url_original"] for ex in partidos_dict[titulo_partido]):
+                                            partidos_dict[titulo_partido].append(c)
 
                 except Exception:
                     continue
@@ -181,7 +188,6 @@ def interceptar_m3u8(url_reproductor):
 
 
 # --- SOPORTE PARA API JSON (Para la APK) ---
-# Si abres la URL con el parámetro ?api=true, Streamlit devolverá el JSON puro en lugar de la web
 query_params = st.query_params
 if "api" in query_params:
     st.json(obtener_agenda_real())
@@ -199,9 +205,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("⚽ Agenda de Partidos")
-
-# Aviso útil para ti en la web
-st.info("💡 **Consejo:** Tu APK debe conectarse a: `https://backend-deportes-55vi.onrender.com/?api=true`")
 
 if "agenda" not in st.session_state:
     st.session_state.agenda = []
