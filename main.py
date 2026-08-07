@@ -1,10 +1,12 @@
-import streamlit as st
+import os
+from flask import Flask, jsonify
 from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, quote
+from urllib.parse import urljoin
 import base64
 import re
-import json
+
+app = Flask(__name__)
 
 def obtener_agenda_real():
     url_base = "https://pelotaalibre.st/inicio.php"
@@ -29,20 +31,16 @@ def obtener_agenda_real():
                     html = marco.content()
                     soup = BeautifulSoup(html, "html.parser")
 
-                    # Buscamos elementos detallados
                     bloques = soup.find_all(["div", "tr", "li", "section", "article", "p"])
                     
                     for bloque in bloques:
                         texto_bloque = bloque.get_text(separator=" ", strip=True)
                         
-                        # FILTRO CLAVE: Un bloque de un solo partido debe tener EXACTAMENTE una hora (HH:MM).
-                        # Si tiene varias horas, es un contenedor general que agrupa muchos partidos y lo ignoramos.
                         horas_en_bloque = re.findall(r'\d{2}:\d{2}', texto_bloque)
                         if len(horas_en_bloque) != 1:
                             continue
                         
-                        tiene_vs = " vs " in texto_bloque.lower() or " - " in texto_bloque
-                        if not tiene_vs:
+                        if " vs " not in texto_bloque.lower() and " - " not in texto_bloque:
                             continue
 
                         lineas = [l.strip() for l in texto_bloque.split('\n') if len(l.strip()) > 5]
@@ -113,8 +111,8 @@ def obtener_agenda_real():
                 except Exception:
                     continue
 
-        except Exception as e:
-            st.error(f"Error al analizar la agenda: {e}")
+        except Exception:
+            pass
         finally:
             browser.close()
 
@@ -127,121 +125,10 @@ def obtener_agenda_real():
 
     return lista_final
 
+@app.route("/")
+def api_agenda():
+    return jsonify(obtener_agenda_real())
 
-def interceptar_m3u8(url_reproductor):
-    m3u8_link = None
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--autoplay-policy=no-user-gesture-required",
-                "--disable-web-security",
-                "--mute-audio"
-            ]
-        )
-        
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={'width': 1280, 'height': 720},
-            extra_http_headers={"Referer": "https://pelotaalibre.st/"}
-        )
-        page = context.new_page()
-
-        def manejar_peticion(request):
-            nonlocal m3u8_link
-            if ".m3u8" in request.url and not m3u8_link:
-                m3u8_link = request.url
-
-        page.on("request", manejar_peticion)
-
-        try:
-            page.goto(url_reproductor, wait_until="domcontentloaded", timeout=15000)
-            
-            page.evaluate("""
-                setInterval(() => {
-                    document.querySelectorAll('div').forEach(d => {
-                        if(d.style.zIndex > 100) d.remove();
-                    });
-                    document.querySelectorAll('video').forEach(v => {
-                        v.muted = true;
-                        v.play().catch(e => {});
-                    });
-                }, 500);
-            """)
-
-            for _ in range(3):
-                if m3u8_link: break
-                try: page.mouse.click(640, 360)
-                except: pass
-                page.wait_for_timeout(300)
-
-            for _ in range(80):
-                if m3u8_link: break
-                page.wait_for_timeout(100)
-
-        except Exception:
-            pass 
-        finally:
-            browser.close()
-            
-    return m3u8_link
-
-
-# --- SOPORTE PARA API JSON (Para la APK) ---
-query_params = st.query_params
-if "api" in query_params:
-    st.json(obtener_agenda_real())
-    st.stop()
-
-
-# --- INTERFAZ STREAMLIT (Para la Web) ---
-st.set_page_config(page_title="Agenda Deportiva", page_icon="⚽", layout="centered")
-
-st.markdown("""
-<style>
-    .stButton button { width: 100%; }
-    .canal-calidad { color: #888; font-size: 0.95em; text-align: center; margin-top: 8px;}
-</style>
-""", unsafe_allow_html=True)
-
-st.title("⚽ Agenda de Partidos")
-
-if "agenda" not in st.session_state:
-    st.session_state.agenda = []
-
-if st.button("🔄 Cargar Partidos de Hoy"):
-    with st.spinner("Escaneando la agenda..."):
-        st.session_state.agenda = obtener_agenda_real()
-    if st.session_state.agenda:
-        st.success(f"¡Se encontraron {len(st.session_state.agenda)} partidos!")
-    else:
-        st.warning("No se encontraron partidos activos.")
-
-for i, evento in enumerate(st.session_state.agenda):
-    with st.expander(f"🏅 {evento['partido']}"):
-        for j, canal in enumerate(evento['canales']):
-            
-            col1, col2, col3 = st.columns([3, 2, 3])
-            
-            with col1:
-                st.markdown(f"**▶ {canal['nombre']}**")
-                if canal['servidor'] != "Desconocido":
-                    st.caption(f"Servidor: {canal['servidor']}")
-            
-            with col2:
-                st.markdown(f"<div class='canal-calidad'><i>{canal['calidad']}</i></div>", unsafe_allow_html=True)
-            
-            with col3:
-                if st.button(f"🔍 Extraer .m3u8", key=f"btn_m3u8_{i}_{j}"):
-                    with st.spinner("Interceptando enlace..."):
-                        m3u8_url = interceptar_m3u8(canal['url_original'])
-                        
-                        if m3u8_url:
-                            st.success("✅ Enlace capturado")
-                            st.code(m3u8_url, language="text")
-                            reproductor_prueba = f"https://hlsjs.video-dev.org/demo/?src={quote(m3u8_url)}"
-                            st.markdown(f"[▶️ Probar el m3u8 en reproductor web]({reproductor_prueba})")
-                        else:
-                            st.error("No se pudo interceptar el enlace.")
-            
-            st.divider()
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
