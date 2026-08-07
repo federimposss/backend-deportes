@@ -1,3 +1,3 @@
-streamlit
+flask
 playwright
 beautifulsoup4
