@@ -12,8 +12,12 @@ def obtener_agenda_real():
     url_base = "https://pelotaalibre.st/inicio.php"
     partidos_dict = {}
 
+    # AQUÍ ESTABA EL ERROR: Se agregaron los argumentos de seguridad para Docker
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        )
         page = browser.new_page(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
@@ -127,7 +131,10 @@ def obtener_agenda_real():
 
 @app.route("/")
 def api_agenda():
-    return jsonify(obtener_agenda_real())
+    try:
+        return jsonify(obtener_agenda_real())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
